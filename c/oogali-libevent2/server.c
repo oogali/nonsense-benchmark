@@ -31,12 +31,14 @@ void handle_nonce(struct bufferevent *bev, void *ptr) {
   int nonce = 0, nonce_len;
   size_t string_len;
 
+  /* get output buffer handle */
   output = bufferevent_get_output(bev);
   if (output == NULL) {
     fprintf(stderr, "bufferevent_get_output: could not get handle for output buffer\n");
     return;
   }
 
+  /* zero out string, read client input */
   bzero(&string, sizeof(string));
   string_len = bufferevent_read(bev, string, sizeof(string));
   if (string_len == -1) {
@@ -44,18 +46,25 @@ void handle_nonce(struct bufferevent *bev, void *ptr) {
     return;
   }
 
+  /*
+   * XXX: i thought i was being clever, but with the break; who cares?
+   */
   digest_hash[31] = 0xff;
   while(digest_hash[31] != 0) {
+    /* append nonce and get length of string + nonce */
     nonce_len = snprintf(string + string_len, sizeof(string) - string_len, "%d", nonce);
 
+    /* calculate digest and check if last byte is zero */
     SHA256((unsigned char *)string, string_len + nonce_len, digest_hash);
     if (digest_hash[SHA256_DIGEST_LENGTH - 1] == 0) {
       break;
     }
 
+    /* y helo thar */
     nonce++;
   }
 
+  /* restore our string, and output string+colon+nonce to client */
   string[string_len] = '\0';
   evbuffer_add_printf(output, "%s:%d", string, nonce);
 }
@@ -89,21 +98,25 @@ void incoming_conn(struct evconnlistener *evc, evutil_socket_t sock, struct sock
     return;
   }
 
+  /* initialize our buffered event socket */
   bev = bufferevent_socket_new(eb, sock, BEV_OPT_THREADSAFE | BEV_OPT_CLOSE_ON_FREE);
   if (bev == NULL) {
     fprintf(stderr, "bufferevent_socket_new: could not allocate new event buffer for incoming connection\n");
     return;
   }
 
+  /* get our output handle, so we can write handshake */
   output = bufferevent_get_output(bev);
   if (output == NULL) {
     fprintf(stderr, "bufferevent_get_output: could not get handle for output buffer\n");
     return;
   }
-
   evbuffer_add(output, OK, strlen(OK));
 
+  /* set callback for handling event errors */
   bufferevent_setcb(bev, handle_nonce, NULL, conn_event_handler, NULL);
+
+  /* enable watching for readability on this socket */
   if (bufferevent_enable(bev, EV_READ) < 0) {
     fprintf(stderr, "bufferevent_enable: could not enable reading of buffered events\n");
     return;
@@ -113,6 +126,9 @@ void incoming_conn(struct evconnlistener *evc, evutil_socket_t sock, struct sock
 void conn_error(struct evconnlistener *evc, void *ptr) {
   struct event_base *eb = NULL;
 
+  /*
+   * XXX: should probably tell user why we're exiting
+   */
   event_base_loopexit(eb, NULL);
 }
 
@@ -121,6 +137,7 @@ struct evconnlistener *init_server(struct event_base *eb, char *bindaddr, int bi
   struct evconnlistener *evc = NULL;
   struct sockaddr_in sin;
 
+  /* zero and fill our socket address structure */
   bzero(&sin, sizeof(struct sockaddr));
   sin.sin_family = AF_INET;
   sin.sin_addr.s_addr = inet_addr(bindaddr);
@@ -132,6 +149,7 @@ struct evconnlistener *init_server(struct event_base *eb, char *bindaddr, int bi
     return NULL;
   }
 
+  /* set incoming connection and connection error handlers */
   evconnlistener_set_cb(evc, incoming_conn, NULL);
   evconnlistener_set_error_cb(evc, conn_error);
 
@@ -181,7 +199,7 @@ int main(int argc, char **argv)
   argc -= optind;
   argv += optind;
   
-  /* set default bind and redis ips if none given */
+  /* set default bind ip and port if none given */
   if (*bindaddr == 0) {
     strncpy(bindaddr, BINDADDR, sizeof(bindaddr));
     bindport = PORT;
@@ -216,6 +234,7 @@ int main(int argc, char **argv)
   /* enter main event loop */
   event_base_dispatch(eb);
 
+  /* free our event structures */
   if (evc != NULL)
     evconnlistener_free(evc);
 
